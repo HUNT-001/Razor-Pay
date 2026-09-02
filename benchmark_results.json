@@ -1,0 +1,47 @@
+{
+  "n_cases": 10000,
+  "seed": 42,
+  "class_distribution": {
+    "transient_gateway_failure": 2969,
+    "insufficient_funds": 1966,
+    "invalid_instrument": 1534,
+    "authentication_failed": 1542,
+    "bank_declined": 1505,
+    "risk_declined": 484
+  },
+  "baseline": {
+    "strategy": "baseline_always_retry",
+    "total_cases": 10000,
+    "revenue_at_risk": 81851252.36,
+    "revenue_recovered": 27554229.549999945,
+    "cases_recovered": 3317,
+    "total_actions": 16683,
+    "unnecessary_actions": 7637,
+    "escalated": 6683,
+    "per_action_counts": {
+      "escalate": 6683,
+      "retry": 10000
+    },
+    "recovery_rate": 0.33663784921469886,
+    "avg_actions_per_case": 1.6683
+  },
+  "recoverai": {
+    "strategy": "recoverai",
+    "total_cases": 10000,
+    "revenue_at_risk": 81851252.36,
+    "revenue_recovered": 63321243.780000046,
+    "cases_recovered": 7749,
+    "total_actions": 15742,
+    "unnecessary_actions": 4018,
+    "escalated": 2115,
+    "per_action_counts": {
+      "delayed_retry": 4926,
+      "escalate": 2115,
+      "payment_link": 5732,
+      "retry": 2969
+    },
+    "recovery_rate": 0.7736136217134363,
+    "avg_actions_per_case": 1.5742
+  },
+  "lift_pp": 43.697577249873746
+}
