@@ -27,6 +27,10 @@ class Payment(Base):
     status = Column(String)  # created | authorized | captured | failed | refunded
     method = Column(String)
     failure_reason = Column(String)
+    error_code = Column(String)
+    error_source = Column(String)
+    error_step = Column(String)
+    error_reason_code = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     customer = relationship("Customer")
