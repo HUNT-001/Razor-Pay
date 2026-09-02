@@ -34,9 +34,14 @@ def run_recovery_cycle(db: Session, case: RecoveryCase) -> RecoveryAction:
     ctx = AgentContext(
         amount=payment.amount,
         failure_reason=payment.failure_reason,
+        error_code=payment.error_code,
+        error_source=payment.error_source,
+        error_step=payment.error_step,
+        error_reason_code=payment.error_reason_code,
         attempt_number=case.attempts + 1,
         customer_success_rate=success_rate,
         customer_previous_failures=customer.failure_count if customer else 0,
+        customer_previous_successes=customer.success_count if customer else 0,
         payment_method=payment.method,
     )
     decision = get_decision(ctx)
@@ -54,6 +59,7 @@ def run_recovery_cycle(db: Session, case: RecoveryCase) -> RecoveryAction:
     db.add(action)
     case.attempts += 1
     case.status = "recovering"
+    db.flush()  # get action.id if needed
 
     if not policy.approved:
         action.result = "blocked"
@@ -63,13 +69,23 @@ def run_recovery_cycle(db: Session, case: RecoveryCase) -> RecoveryAction:
         db.refresh(action)
         return action
 
-    outcome = execute(decision, payment.amount)
+    outcome = execute(
+        decision, payment.amount,
+        customer_email=customer.email if customer else None,
+        customer_contact=customer.phone if customer else None,
+        case_id=case.id,
+    )
     action.result = outcome["result"]
-    action.external_ref = outcome["external_ref"]
+    action.external_ref = outcome.get("external_ref")
 
     if outcome["result"] == "success":
         case.status = "recovered"
-        case.recovered_amount = outcome["recovered_amount"]
+        case.recovered_amount = outcome.get("recovered_amount", payment.amount)
+    elif outcome["result"] == "pending":
+        # payment_link created; awaits payment_link.paid webhook
+        case.status = "recovering"
+    elif outcome["result"] == "escalated":
+        case.status = "escalated"
     elif case.attempts >= 3:
         case.status = "escalated"
 
@@ -79,12 +95,42 @@ def run_recovery_cycle(db: Session, case: RecoveryCase) -> RecoveryAction:
         payload={
             "action": outcome["action"],
             "result": outcome["result"],
-            "recovered_amount": outcome["recovered_amount"],
+            "recovered_amount": outcome.get("recovered_amount", 0.0),
             "diagnosis": decision.diagnosis,
             "confidence": decision.confidence,
+            "external_ref": outcome.get("external_ref"),
+            "short_url": outcome.get("short_url"),
+            "error": outcome.get("error"),
         },
     ))
     case.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(action)
     return action
+
+
+def mark_case_recovered_by_link(db: Session, payment_link_id: str, paid_amount_inr: float) -> RecoveryCase | None:
+    """Find the case whose latest action referenced this Payment Link and close it."""
+    action = (
+        db.query(RecoveryAction)
+        .filter_by(external_ref=payment_link_id, action_type="payment_link")
+        .order_by(RecoveryAction.id.desc())
+        .first()
+    )
+    if not action:
+        return None
+    case = db.query(RecoveryCase).get(action.case_id)
+    if not case:
+        return None
+    action.result = "success"
+    case.status = "recovered"
+    case.recovered_amount = paid_amount_inr
+    case.updated_at = datetime.utcnow()
+    db.add(AuditLog(
+        event="payment_link.paid",
+        case_id=case.id,
+        payload={"payment_link_id": payment_link_id, "amount": paid_amount_inr},
+    ))
+    db.commit()
+    db.refresh(case)
+    return case
