@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>RecoverAI</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#131a22; --panel-2:#1a2330; --line:#233144;
+    --text:#e6edf3; --muted:#8ea2b8; --accent:#7c9cff; --ok:#4ade80;
+    --warn:#fbbf24; --bad:#fb7185; --info:#38bdf8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
+  a{color:var(--accent)}
+  header{padding:20px 28px;border-bottom:1px solid var(--line);display:flex;
+    align-items:center;justify-content:space-between}
+  header h1{margin:0;font-size:18px;letter-spacing:.3px}
+  header h1 span{color:var(--accent)}
+  header .sub{color:var(--muted);font-size:12px;margin-top:2px}
+  main{padding:24px 28px;max-width:1400px;margin:0 auto}
+  .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .kpi .label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+  .kpi .value{font-size:26px;font-weight:600;margin-top:6px}
+  .kpi .sub{color:var(--muted);font-size:12px;margin-top:4px}
+  .row{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card h3{margin:0 0 12px 0;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:10px 8px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  tr.case{cursor:pointer}
+  tr.case:hover{background:var(--panel-2)}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500}
+  .pill.recovered{background:rgba(74,222,128,.15);color:var(--ok)}
+  .pill.recovering{background:rgba(56,189,248,.15);color:var(--info)}
+  .pill.escalated{background:rgba(251,191,36,.15);color:var(--warn)}
+  .pill.stopped{background:rgba(251,113,133,.15);color:var(--bad)}
+  .pill.open{background:rgba(142,162,184,.15);color:var(--muted)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;
+    justify-content:center;padding:20px;z-index:100}
+  .modal.open{display:flex}
+  .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    max-width:820px;width:100%;max-height:90vh;overflow:auto;padding:22px 26px}
+  .modal-card h2{margin:0 0 4px 0;font-size:18px}
+  .modal-card .sub{color:var(--muted);font-size:12px;margin-bottom:16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+  .box{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .box .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+  .box .v{font-size:14px}
+  .audit{margin-top:10px}
+  .audit .entry{padding:8px 10px;border-left:2px solid var(--line);margin-bottom:6px;font-size:12px}
+  .audit .entry .ev{color:var(--accent);font-weight:500}
+  .audit .entry pre{margin:4px 0 0 0;color:var(--muted);white-space:pre-wrap;font-size:11px}
+  .close{float:right;background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1}
+  .empty{color:var(--muted);text-align:center;padding:24px}
+  .short-url{color:var(--accent);text-decoration:none}
+  .short-url:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Recover<span>AI</span></h1>
+    <div class="sub">Autonomous Revenue Recovery Agent · Razorpay Test Mode</div>
+  </div>
+  <div class="sub" id="last-updated">—</div>
+</header>
+
+<main>
+  <div class="kpi-row">
+    <div class="kpi"><div class="label">Revenue at Risk</div><div class="value" id="k-risk">—</div><div class="sub" id="k-cases-total">— cases</div></div>
+    <div class="kpi"><div class="label">Revenue Recovered</div><div class="value" id="k-rec" style="color:var(--ok)">—</div><div class="sub" id="k-cases-rec">— recovered</div></div>
+    <div class="kpi"><div class="label">Recovery Rate</div><div class="value" id="k-rate">—</div><div class="sub">of at-risk revenue</div></div>
+    <div class="kpi"><div class="label">Open Cases</div><div class="value" id="k-open">—</div><div class="sub">recovering / open</div></div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h3>Cases</h3>
+      <table>
+        <thead><tr>
+          <th>#</th><th>Amount</th><th>Failure</th><th>Diagnosis</th><th>Action</th><th>Status</th>
+        </tr></thead>
+        <tbody id="cases-body"><tr><td class="empty" colspan="6">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3>Action Mix</h3>
+      <canvas id="action-chart" height="220"></canvas>
+    </div>
+  </div>
+</main>
+
+<div class="modal" id="modal"><div class="modal-card">
+  <button class="close" onclick="closeModal()">×</button>
+  <h2 id="m-title">Case</h2>
+  <div class="sub" id="m-sub"></div>
+  <div class="grid2" id="m-grid"></div>
+  <h3 style="margin:10px 0;font-size:13px;color:var(--muted)">Audit Trail</h3>
+  <div class="audit" id="m-audit"></div>
+</div></div>
+
+<script>
+const fmtINR = n => "₹" + (n||0).toLocaleString("en-IN", {maximumFractionDigits:2});
+const pct = n => ((n||0)*100).toFixed(1) + "%";
+
+let chart;
+async function refreshNow(){
+  const [sumR, cases] = await Promise.all([
+    fetch("/analytics/summary").then(r=>r.json()),
+    fetch("/recovery/cases?limit=100").then(r=>r.json())
+  ]);
+  document.getElementById("k-risk").textContent = fmtINR(sumR.revenue_at_risk);
+  document.getElementById("k-rec").textContent = fmtINR(sumR.revenue_recovered);
+  document.getElementById("k-rate").textContent = pct(sumR.recovery_rate);
+  document.getElementById("k-cases-total").textContent = `${sumR.cases_total} cases`;
+  document.getElementById("k-cases-rec").textContent = `${sumR.cases_recovered} recovered`;
+  document.getElementById("k-open").textContent = sumR.cases_total - sumR.cases_recovered;
+
+  const details = await Promise.all(cases.slice(0,100).map(c =>
+    fetch(`/recovery/cases/${c.id}`).then(r=>r.json()).catch(()=>null)));
+  renderCases(cases, details);
+  renderChart(details);
+  document.getElementById("last-updated").textContent = "Updated " + new Date().toLocaleTimeString();
+}
+
+function renderCases(cases, details){
+  const body = document.getElementById("cases-body");
+  if (!cases.length){ body.innerHTML = `<tr><td class="empty" colspan="6">No cases yet — trigger a failed payment.</td></tr>`; return; }
+  body.innerHTML = cases.map((c, i) => {
+    const d = details[i];
+    const lastAction = d && d.actions && d.actions[d.actions.length-1];
+    const diag = lastAction ? lastAction.diagnosis : "—";
+    const act = lastAction ? lastAction.type : "—";
+    const failShort = (d && d.payment && (d.payment.failure_reason||"").slice(0,60)) || "—";
+    return `<tr class="case" onclick="openCase(${c.id})">
+      <td class="mono">#${c.id}</td>
+      <td>${fmtINR(c.revenue_at_risk)}</td>
+      <td>${failShort}</td>
+      <td><span class="mono">${diag}</span></td>
+      <td><span class="mono">${act}</span></td>
+      <td><span class="pill ${c.status}">${c.status}</span></td>
+    </tr>`;
+  }).join("");
+}
+
+function renderChart(details){
+  const counts = {};
+  details.forEach(d => {
+    if (!d || !d.actions) return;
+    d.actions.forEach(a => { counts[a.type] = (counts[a.type]||0) + 1; });
+  });
+  const labels = Object.keys(counts);
+  const data = Object.values(counts);
+  const colors = ["#7c9cff","#4ade80","#38bdf8","#fbbf24","#fb7185","#a78bfa"];
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById("action-chart"), {
+    type: "doughnut",
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: "#131a22", borderWidth: 2 }] },
+    options: {
+      plugins: { legend: { labels: { color: "#e6edf3", font: { size: 12 } } } },
+      cutout: "60%"
+    }
+  });
+}
+
+async function openCase(id){
+  const d = await fetch(`/recovery/cases/${id}`).then(r=>r.json());
+  document.getElementById("m-title").textContent = `Case #${d.case.id}`;
+  document.getElementById("m-sub").textContent = `Payment #${d.payment.id} · ${fmtINR(d.payment.amount)} · ${d.payment.method || "unknown method"}`;
+  const last = d.actions[d.actions.length-1] || {};
+  const linkAudit = d.audit_log.find(l => l.payload && l.payload.short_url);
+  const shortUrl = linkAudit ? linkAudit.payload.short_url : null;
+  document.getElementById("m-grid").innerHTML = `
+    <div class="box"><div class="k">Failure Reason</div><div class="v">${d.payment.failure_reason || "—"}</div></div>
+    <div class="box"><div class="k">Status</div><div class="v"><span class="pill ${d.case.status}">${d.case.status}</span></div></div>
+    <div class="box"><div class="k">Diagnosis</div><div class="v mono">${last.diagnosis || "—"} <span style="color:var(--muted)">(${((last.confidence||0)*100).toFixed(0)}%)</span></div></div>
+    <div class="box"><div class="k">Recommended Action</div><div class="v mono">${last.type || "—"} · policy: ${last.policy || "—"} · result: ${last.result || "—"}</div></div>
+    <div class="box" style="grid-column:span 2"><div class="k">Reason</div><div class="v">${last.reason || "—"}</div></div>
+    <div class="box"><div class="k">Revenue at Risk</div><div class="v">${fmtINR(d.case.revenue_at_risk)}</div></div>
+    <div class="box"><div class="k">Recovered</div><div class="v" style="color:var(--ok)">${fmtINR(d.case.recovered_amount)}</div></div>
+    ${shortUrl ? `<div class="box" style="grid-column:span 2"><div class="k">Recovery Link</div><div class="v"><a class="short-url" href="${shortUrl}" target="_blank">${shortUrl}</a></div></div>` : ""}
+  `;
+  document.getElementById("m-audit").innerHTML = d.audit_log.map(l => `
+    <div class="entry"><span class="ev">${l.event}</span>
+    <span style="color:var(--muted);margin-left:8px">${new Date(l.at).toLocaleString()}</span>
+    <pre>${JSON.stringify(l.payload, null, 2)}</pre></div>`).join("") || `<div class="empty">No audit entries</div>`;
+  document.getElementById("modal").classList.add("open");
+}
+function closeModal(){ document.getElementById("modal").classList.remove("open"); }
+document.getElementById("modal").addEventListener("click", e => { if (e.target.id === "modal") closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+refreshNow();
+setInterval(refreshNow, 5000);
+</script>
+</body>
+</html>
