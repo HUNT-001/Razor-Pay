@@ -246,39 +246,39 @@ The router falls back to the stub on any error, so a rate-limited or offline LLM
 
 ```
 app/
-  main.py              FastAPI entrypoint
-  config.py            env-driven settings
-  db.py                SQLAlchemy engine + session
-  models/entities.py   Customer · Payment · PaymentEvent · RecoveryCase · RecoveryAction · AuditLog
-  agent/
-    schema.py          AgentContext / AgentDecision (pydantic, 5-value action enum)
-    stub_llm.py        deterministic diagnosis + action selection
-    claude_llm.py      Anthropic Claude adapter (forced tool-use)
-    groq_llm.py        Groq adapter (forced tool-use)
-    router.py          stub / claude / groq switch with fallback
-  services/
-    policy.py          attempts · amount · cooldown · allowlist · stopped-guard
-    executor.py        real Razorpay Payment Link creation + simulated retry/notify
-    razorpay_client.py thin lazy wrapper around the razorpay SDK
-    cases.py           open case · run_recovery_cycle · mark_case_recovered_by_link
-    escalation.py      Slack webhook + log file on escalated cases
-  routes/
-    webhooks.py        /webhooks/razorpay (HMAC + idempotency + background queue)
-    analytics.py       /analytics/summary (KPIs + unit economics)
-    cases.py           /recovery/cases[/{id}] (with expand=true bulk endpoint)
-    dashboard.py       /dashboard (single-file HTML)
-  static/
-    dashboard.html     the operations console
-scripts/
-  simulator.py                     10k-case benchmark, baseline vs RecoverAI
-  seed_demo.py                     3 pre-canned failed payments for a smooth demo
-  simulate_failed_webhook.py       smoke test
-tests/
-  test_smoke.py · test_policy.py · test_agent.py
-docs/
-  ARCHITECTURE.md · BENCHMARK.md · VIDEO_SCRIPT.md
-assets/
-  screenshots + Razorpay logo
+├── main.py              FastAPI entrypoint
+├── config.py            env-driven settings
+├── db.py                SQLAlchemy engine + session
+├── models/entities.py   Customer · Payment · PaymentEvent · RecoveryCase · RecoveryAction · AuditLog
+├── agent/
+    ├── schema.py          AgentContext / AgentDecision (pydantic, 5-value action enum)
+    ├── stub_llm.py        deterministic diagnosis + action selection
+    ├── claude_llm.py      Anthropic Claude adapter (forced tool-use)
+    ├── groq_llm.py        Groq adapter (forced tool-use)
+    ├── router.py          stub / claude / groq switch with fallback
+├── services/
+    ├── policy.py          attempts · amount · cooldown · allowlist · stopped-guard
+    ├── executor.py        real Razorpay Payment Link creation + simulated retry/notify
+    ├── razorpay_client.py thin lazy wrapper around the razorpay SDK
+    ├── cases.py           open case · run_recovery_cycle · mark_case_recovered_by_link
+    ├── escalation.py      Slack webhook + log file on escalated cases
+├── routes/
+    ├── webhooks.py        /webhooks/razorpay (HMAC + idempotency + background queue)
+    ├── analytics.py       /analytics/summary (KPIs + unit economics)
+    ├── cases.py           /recovery/cases[/{id}] (with expand=true bulk endpoint)
+    ├── dashboard.py       /dashboard (single-file HTML)
+├── static/
+    ├── dashboard.html     the operations console
+├── scripts/
+  ├── simulator.py                     10k-case benchmark, baseline vs RecoverAI
+  ├── seed_demo.py                     3 pre-canned failed payments for a smooth demo
+  ├── simulate_failed_webhook.py       smoke test
+├── tests/
+  ├── test_smoke.py · test_policy.py · test_agent.py
+├── docs/
+  ├── ARCHITECTURE.md · BENCHMARK.md · VIDEO_SCRIPT.md
+├── assets/
+  ├── screenshots + Razorpay logo
 ```
 
 ## Roadmap (deliberately not built)
