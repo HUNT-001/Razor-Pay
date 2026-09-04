@@ -1,7 +1,16 @@
+import pytest
 from fastapi.testclient import TestClient
+
+from app.config import settings
 from app.main import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _disable_signature_check(monkeypatch):
+    # test posts are unsigned; bypass HMAC by matching the dev sentinel
+    monkeypatch.setattr(settings, "razorpay_webhook_secret", "placeholder")
 
 
 def test_root():
@@ -21,6 +30,9 @@ def test_failed_webhook_creates_case():
             "method": "card",
             "email": "t@example.com",
             "error_description": "Bank gateway timeout",
+            "error_reason": "gateway_timeout",
+            "error_source": "gateway",
+            "error_code": "GATEWAY_ERROR",
         }}},
     }
     r = client.post("/webhooks/razorpay", json=payload)
