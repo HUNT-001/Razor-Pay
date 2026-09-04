@@ -1,25 +1,23 @@
 from datetime import datetime
+
 from sqlalchemy.orm import Session
-from app.models.entities import (
-    Payment, RecoveryCase, RecoveryAction, AuditLog, Customer,
-)
-from app.agent.schema import AgentContext
+
 from app.agent.router import get_decision
-from app.services.policy import evaluate
+from app.agent.schema import AgentContext
+from app.models.entities import (AuditLog, Payment, RecoveryAction, RecoveryCase)
+from app.services.escalation import notify as notify_escalation
 from app.services.executor import execute
+from app.services.policy import evaluate
 
 
 def open_case_for_payment(db: Session, payment: Payment) -> RecoveryCase:
     existing = db.query(RecoveryCase).filter_by(payment_id=payment.id).first()
     if existing:
         return existing
-    case = RecoveryCase(
-        payment_id=payment.id,
-        revenue_at_risk=payment.amount,
-        status="open",
-    )
+    case = RecoveryCase(payment_id=payment.id, revenue_at_risk=payment.amount, status="open")
     db.add(case)
-    db.add(AuditLog(event="case.opened", payload={"payment_id": payment.id, "amount": payment.amount}))
+    db.add(AuditLog(event="case.opened",
+                    payload={"payment_id": payment.id, "amount": payment.amount}))
     db.commit()
     db.refresh(case)
     return case
@@ -59,14 +57,13 @@ def run_recovery_cycle(db: Session, case: RecoveryCase) -> RecoveryAction:
     db.add(action)
     case.attempts += 1
     case.status = "recovering"
-    db.flush()  # get action.id if needed
+    db.flush()
 
     if not policy.approved:
         action.result = "blocked"
         case.status = "stopped"
         db.add(AuditLog(event="policy.rejected", case_id=case.id, payload=policy.checks))
-        db.commit()
-        db.refresh(action)
+        db.commit(); db.refresh(action)
         return action
 
     outcome = execute(
@@ -74,6 +71,7 @@ def run_recovery_cycle(db: Session, case: RecoveryCase) -> RecoveryAction:
         customer_email=customer.email if customer else None,
         customer_contact=customer.phone if customer else None,
         case_id=case.id,
+        case_attempt=case.attempts,
     )
     action.result = outcome["result"]
     action.external_ref = outcome.get("external_ref")
@@ -82,41 +80,33 @@ def run_recovery_cycle(db: Session, case: RecoveryCase) -> RecoveryAction:
         case.status = "recovered"
         case.recovered_amount = outcome.get("recovered_amount", payment.amount)
     elif outcome["result"] == "pending":
-        # payment_link created; awaits payment_link.paid webhook
-        case.status = "recovering"
-    elif outcome["result"] == "escalated":
+        case.status = "recovering"  # awaits payment_link.paid webhook
+    elif outcome["result"] == "escalated" or case.attempts >= 3:
         case.status = "escalated"
-    elif case.attempts >= 3:
-        case.status = "escalated"
+        notify_escalation(case.id, payment.amount, decision.diagnosis,
+                          case.attempts, decision.reason)
 
-    db.add(AuditLog(
-        event="action.executed",
-        case_id=case.id,
-        payload={
-            "action": outcome["action"],
-            "result": outcome["result"],
-            "recovered_amount": outcome.get("recovered_amount", 0.0),
-            "diagnosis": decision.diagnosis,
-            "confidence": decision.confidence,
-            "external_ref": outcome.get("external_ref"),
-            "short_url": outcome.get("short_url"),
-            "error": outcome.get("error"),
-        },
-    ))
+    db.add(AuditLog(event="action.executed", case_id=case.id, payload={
+        "action": outcome["action"],
+        "result": outcome["result"],
+        "recovered_amount": outcome.get("recovered_amount", 0.0),
+        "diagnosis": decision.diagnosis,
+        "confidence": decision.confidence,
+        "external_ref": outcome.get("external_ref"),
+        "short_url": outcome.get("short_url"),
+        "error": outcome.get("error"),
+    }))
     case.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(action)
+    case.last_action_at = datetime.utcnow()
+    db.commit(); db.refresh(action)
     return action
 
 
-def mark_case_recovered_by_link(db: Session, payment_link_id: str, paid_amount_inr: float) -> RecoveryCase | None:
-    """Find the case whose latest action referenced this Payment Link and close it."""
-    action = (
-        db.query(RecoveryAction)
-        .filter_by(external_ref=payment_link_id, action_type="payment_link")
-        .order_by(RecoveryAction.id.desc())
-        .first()
-    )
+def mark_case_recovered_by_link(db: Session, payment_link_id: str,
+                                paid_amount_inr: float) -> RecoveryCase | None:
+    action = (db.query(RecoveryAction)
+              .filter_by(external_ref=payment_link_id, action_type="payment_link")
+              .order_by(RecoveryAction.id.desc()).first())
     if not action:
         return None
     case = db.query(RecoveryCase).get(action.case_id)
@@ -126,11 +116,7 @@ def mark_case_recovered_by_link(db: Session, payment_link_id: str, paid_amount_i
     case.status = "recovered"
     case.recovered_amount = paid_amount_inr
     case.updated_at = datetime.utcnow()
-    db.add(AuditLog(
-        event="payment_link.paid",
-        case_id=case.id,
-        payload={"payment_link_id": payment_link_id, "amount": paid_amount_inr},
-    ))
-    db.commit()
-    db.refresh(case)
+    db.add(AuditLog(event="payment_link.paid", case_id=case.id,
+                    payload={"payment_link_id": payment_link_id, "amount": paid_amount_inr}))
+    db.commit(); db.refresh(case)
     return case
