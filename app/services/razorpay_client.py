@@ -1,6 +1,7 @@
-"""Thin lazy wrapper around the razorpay SDK so tests/stubs don't need creds."""
 from functools import lru_cache
+
 import razorpay
+
 from app.config import settings
 
 
@@ -17,7 +18,7 @@ def create_payment_link(amount_inr: float, description: str,
                         reference_id: str | None = None) -> dict:
     """Create a Test Mode Payment Link. Returns the raw Razorpay response."""
     payload = {
-        "amount": int(round(amount_inr * 100)),  # paise
+        "amount": int(round(amount_inr * 100)),
         "currency": "INR",
         "accept_partial": False,
         "description": description[:2048],
@@ -27,10 +28,6 @@ def create_payment_link(amount_inr: float, description: str,
     if reference_id:
         payload["reference_id"] = reference_id[:40]
     if customer_email or customer_contact:
-        payload["customer"] = {
-            k: v for k, v in {
-                "email": customer_email,
-                "contact": customer_contact,
-            }.items() if v
-        }
+        payload["customer"] = {k: v for k, v in
+                               {"email": customer_email, "contact": customer_contact}.items() if v}
     return client().payment_link.create(data=payload)
