@@ -224,6 +224,7 @@
       <div class="value num" id="k-rec">—</div>
       <div class="sub"><span id="k-cases-rec">—</span> cases closed by RecoverAI</div>
       <div class="bar"><span id="k-recbar" style="width:0%"></span></div>
+      <div class="sub" id="k-roi" style="margin-top:8px;font-weight:600;color:var(--ok)">—</div>
     </div>
     <div class="kpi">
       <div class="label">Recovery Rate</div>
@@ -341,11 +342,9 @@ async function load(){
   try {
     const [sum, cases] = await Promise.all([
       fetch("/analytics/summary").then(r=>r.json()),
-      fetch("/recovery/cases?limit=200").then(r=>r.json())
+      fetch("/recovery/cases?limit=200&expand=true").then(r=>r.json())
     ]);
-    const details = await Promise.all(cases.map(c =>
-      fetch(`/recovery/cases/${c.id}`).then(r=>r.json()).catch(()=>null)));
-    ALL = cases.map((c,i)=>({...c, detail: details[i]}));
+    ALL = cases.map(c => ({...c, detail: c}));
 
     updateKPIs(sum);
     updateAgentBand(sum);
@@ -371,7 +370,14 @@ function updateKPIs(s){
   const active = s.cases_total - s.cases_recovered;
   document.getElementById("k-open").textContent = active;
   const awaiting = ALL.filter(c=>c.status==="recovering").length;
-  document.getElementById("k-open-sub").textContent = awaiting + " awaiting customer";
+  const esc = s.cases_escalated || 0;
+  document.getElementById("k-open-sub").textContent =
+    `${awaiting} awaiting customer · ${esc} escalated`;
+  const roi = s.cost_per_recovered_rupee || 0;
+  const net = s.net_recovered_inr || 0;
+  document.getElementById("k-roi").textContent = s.revenue_recovered > 0
+    ? `${fmtINR(roi)} spent per ₹1 recovered · Net ${fmtINR(net)}`
+    : `${fmtINR(s.cost_inr)} spent · no revenue recovered yet`;
 }
 
 function updateAgentBand(s){
