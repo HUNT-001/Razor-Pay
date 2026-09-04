@@ -1,19 +1,12 @@
-"""Synthetic failed-payment generator + baseline vs RecoverAI benchmark.
+"""Baseline vs RecoverAI benchmark on synthetic failed payments.
 
-Runs entirely in-process (no HTTP, no DB writes) so the numbers are
-reproducible and fast. Uses the exact same stub_llm the live system uses
-for RecoverAI's decisions, so what the benchmark shows is what the live
-service would do.
-
-Usage:
-    python scripts/simulator.py --n 5000 --seed 42
-    python scripts/simulator.py --n 10000 --out results.json
+Runs in-process, imports the same stub_llm the live service uses.
+Usage: python scripts/simulator.py --n 10000 --out results.json
 """
 from __future__ import annotations
 import argparse
 import json
 import random
-import statistics
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -24,21 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.agent.schema import AgentContext, AgentDecision
 from app.agent.stub_llm import decide as recoverai_decide
 
-# --- Ground-truth model -----------------------------------------------------
-#
-# For each true failure class we specify:
-#   weight               how common it is in the wild
-#   template             (error_code, error_source, error_step, error_reason_code)
-#   recovery_prob_by_action  P(success) for each recovery action, per attempt
-#
-# The per-action probabilities encode the domain knowledge the agent has to
-# learn: retrying an invalid card is hopeless, retrying a gateway timeout is
-# ~usually fine, insufficient_funds benefits from a delay, etc.
-#
-# `unnecessary` marks an action that would have "worked" but wasn't needed
-# (e.g. retrying a case that would have self-resolved) — we score it as
-# waste, not a win.
-
+# Ground-truth model: per-class weights + per-action recovery probabilities.
+# See docs/BENCHMARK.md for the rationale.
 FAILURE_CLASSES = {
     "transient_gateway_failure": {
         "weight": 0.30,
