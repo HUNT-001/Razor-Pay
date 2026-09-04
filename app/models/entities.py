@@ -40,7 +40,8 @@ class PaymentEvent(Base):
     __tablename__ = "payment_events"
     id = Column(Integer, primary_key=True)
     payment_id = Column(Integer, ForeignKey("payments.id"))
-    event_type = Column(String)  # payment.failed | payment.captured | ...
+    event_type = Column(String, index=True)
+    razorpay_event_id = Column(String, unique=True, index=True, nullable=True)
     raw = Column(JSON)
     received_at = Column(DateTime, default=datetime.utcnow)
 
@@ -55,6 +56,7 @@ class RecoveryCase(Base):
     recovered_amount = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_action_at = Column(DateTime, nullable=True)
 
     payment = relationship("Payment")
     actions = relationship("RecoveryAction", back_populates="case")
