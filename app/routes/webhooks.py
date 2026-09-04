@@ -1,29 +1,44 @@
-import hmac
 import hashlib
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sqlalchemy.orm import Session
-from app.db import get_db
-from app.config import settings
-from app.models.entities import Payment, PaymentEvent, Customer, AuditLog
-from app.services.cases import (
-    open_case_for_payment, run_recovery_cycle, mark_case_recovered_by_link,
-)
+import hmac
+import logging
 
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.db import SessionLocal, get_db
+from app.models.entities import AuditLog, Customer, Payment, PaymentEvent
+from app.services.cases import (mark_case_recovered_by_link,
+                                 open_case_for_payment, run_recovery_cycle)
+
+log = logging.getLogger("recoverai.webhook")
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
+def _run_cycle_bg(case_id: int) -> None:
+    """Run the recovery cycle in a fresh session — safe for background execution."""
+    db = SessionLocal()
+    try:
+        from app.models.entities import RecoveryCase
+        case = db.query(RecoveryCase).get(case_id)
+        if not case:
+            return
+        action = run_recovery_cycle(db, case)
+        log.info("case=%s diag=%s action=%s policy=%s result=%s",
+                 case.id, action.diagnosis, action.action_type,
+                 action.policy_decision, action.result)
+    finally:
+        db.close()
+
+
 def _verify_signature(body: bytes, signature: str) -> bool:
-    expected = hmac.new(
-        settings.razorpay_webhook_secret.encode(),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
+    expected = hmac.new(settings.razorpay_webhook_secret.encode(),
+                        body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature or "")
 
 
 def _upsert_payment(db: Session, entity: dict) -> Payment:
     rzp_id = entity.get("id") or "unknown"
-    amount_inr = (entity.get("amount", 0) or 0) / 100.0
     payment = db.query(Payment).filter_by(razorpay_payment_id=rzp_id).first()
     if payment:
         return payment
@@ -36,7 +51,7 @@ def _upsert_payment(db: Session, entity: dict) -> Payment:
     payment = Payment(
         razorpay_payment_id=rzp_id,
         customer_id=customer.id,
-        amount=amount_inr,
+        amount=(entity.get("amount", 0) or 0) / 100.0,
         currency=entity.get("currency", "INR"),
         status=entity.get("status", "failed"),
         method=entity.get("method"),
@@ -53,6 +68,7 @@ def _upsert_payment(db: Session, entity: dict) -> Payment:
 @router.post("/razorpay")
 async def razorpay_webhook(
     request: Request,
+    background: BackgroundTasks,
     x_razorpay_signature: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ):
@@ -63,14 +79,19 @@ async def razorpay_webhook(
 
     payload = await request.json()
     event_type = payload.get("event", "unknown")
+    event_id = request.headers.get("x-razorpay-event-id")
     p = payload.get("payload", {}) or {}
 
-    # payment.failed / payment.captured — has payload.payment.entity
+    # Idempotency: Razorpay may retry the same delivery. Skip if we've handled it.
+    if event_id and db.query(PaymentEvent).filter_by(razorpay_event_id=event_id).first():
+        log.info("duplicate webhook ignored event_id=%s type=%s", event_id, event_type)
+        return {"received": event_type, "duplicate": True}
+
+
     if event_type in ("payment.failed", "payment.captured"):
         entity = (p.get("payment", {}) or {}).get("entity", {}) or {}
         payment = _upsert_payment(db, entity)
-        db.add(PaymentEvent(payment_id=payment.id, event_type=event_type, raw=payload))
-        # bump customer counters
+        db.add(PaymentEvent(payment_id=payment.id, event_type=event_type, razorpay_event_id=event_id, raw=payload))
         if payment.customer:
             if event_type == "payment.captured":
                 payment.customer.success_count += 1
@@ -81,17 +102,12 @@ async def razorpay_webhook(
         result = {"received": event_type, "payment_id": payment.id}
         if event_type == "payment.failed":
             case = open_case_for_payment(db, payment)
-            action = run_recovery_cycle(db, case)
-            result.update({
-                "case_id": case.id,
-                "case_status": case.status,
-                "action": action.action_type,
-                "action_result": action.result,
-                "external_ref": action.external_ref,
-            })
+            # Recovery cycle runs async so we return 200 to Razorpay in <50ms
+            # regardless of LLM / payment-link creation latency.
+            background.add_task(_run_cycle_bg, case.id)
+            result.update({"case_id": case.id, "case_status": "queued"})
         return result
 
-    # payment_link.paid — customer paid a recovery link we generated
     if event_type == "payment_link.paid":
         link_entity = (p.get("payment_link", {}) or {}).get("entity", {}) or {}
         pay_entity = (p.get("payment", {}) or {}).get("entity", {}) or {}
@@ -105,7 +121,7 @@ async def razorpay_webhook(
         return {"received": event_type, "link_id": link_id,
                 "matched_case_id": case.id if case else None}
 
-    # Unhandled event — log and 200 so Razorpay doesn't retry forever
+    # Unhandled: 200 so Razorpay stops retrying, audit for visibility.
     db.add(AuditLog(event=f"unhandled:{event_type}", payload=payload))
     db.commit()
     return {"received": event_type, "handled": False}
