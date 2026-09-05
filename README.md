@@ -122,6 +122,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the component-by-componen
 | Full audit trail                       | `AuditLog` rows, viewable per-case                         |
 | Webhook signature verification         | `_verify_signature` (HMAC-SHA256, enforced in prod)        |
 | Webhook idempotency                    | `PaymentEvent.razorpay_event_id` unique index              |
+| LLM output sandbox                     | `app/agent/router.py` — coherence check (diagnosis ↔ action) |
+| Unit economics                         | `/analytics/summary` — `cost_inr`, `roi_multiple`, `cost_per_recovered_rupee` |
 
 ## Results
 
@@ -173,7 +175,7 @@ Defaults (all env-tunable): ₹0.05 per LLM decision, ₹0.50 per Payment Link, 
 Requires Python 3.10–3.13. On 3.13 you also need `pip install "setuptools<81"` because the Razorpay SDK still imports `pkg_resources`.
 
 ```bash
-git clone <this repo>
+git clone https://github.com/HUNT-001/Razor-Pay.git
 cd Razor-Pay
 python -m venv .venv
 # Windows:  .venv\Scripts\activate
@@ -193,7 +195,7 @@ Open **http://127.0.0.1:8000/dashboard**.
 3. **Settings → Webhooks → Add**:
    - URL: `https://<your-tunnel>/webhooks/razorpay`
    - Secret: any strong string; paste the *same* string into `.env` as `RAZORPAY_WEBHOOK_SECRET`.
-   - Active events: `payment.failed`, `payment.captured`, `payment_link.paid`.
+   - Active events: `payment.failed`, `payment.captured`, `payment_link.paid`, `payment_link.expired`, `payment_link.cancelled`.
 4. Restart uvicorn so it picks up the new secret.
 5. Create a test Payment Link from the dashboard and pay it with fail card `4000 0000 0000 0002`.
 
@@ -234,6 +236,8 @@ The router falls back to the stub on any error, so a rate-limited or offline LLM
 - **Amount ceiling** — actions above ₹50,000 are blocked.
 - **Cooldown** — 60s minimum gap between actions on the same case; a burst of duplicate webhooks cannot exhaust the attempt budget in a second.
 - **Action allowlist** — the LLM cannot invent an action; `AgentDecision.recommended_action` is a 5-value Literal, and policy re-validates against a hard-coded set.
+- **LLM output sandbox** — `app/agent/router.py` rejects semantically incoherent pairs like `risk_declined → retry` and coerces them to the deterministic stub's choice, so a real LLM cannot bypass domain rules even within the allowlist.
+- **Payment Link expiry** — every recovery link is created with `expire_by = now + 24h`; `payment_link.expired` / `payment_link.cancelled` webhooks close the case as `stopped` instead of leaving it in limbo.
 - **Risk-declined → straight to escalate** — no retrying suspected fraud.
 - **Webhook signature** — HMAC-SHA256 verified when `RAZORPAY_WEBHOOK_SECRET` is set; bad signatures return 400.
 - **Webhook idempotency** — `PaymentEvent.razorpay_event_id` is unique-indexed; a retry of the same delivery returns `{"duplicate": true}` with no side effects.
@@ -245,48 +249,43 @@ The router falls back to the stub on any error, so a rate-limited or offline LLM
 ## Repo layout
 
 ```
-app/
-├── main.py              FastAPI entrypoint
-├── config.py            env-driven settings
-├── db.py                SQLAlchemy engine + session
-├── models/entities.py   Customer · Payment · PaymentEvent · RecoveryCase · RecoveryAction · AuditLog
-│
-├── agent/
-│    ├── schema.py          AgentContext / AgentDecision (pydantic, 5-value action enum)
-│    ├── stub_llm.py        deterministic diagnosis + action selection
-│    ├── claude_llm.py      Anthropic Claude adapter (forced tool-use)
-│    ├── groq_llm.py        Groq adapter (forced tool-use)
-│    └── router.py          stub / claude / groq switch with fallback
-│
-├── services/
-│    ├── policy.py          attempts · amount · cooldown · allowlist · stopped-guard
-│    ├── executor.py        real Razorpay Payment Link creation + simulated retry/notify
-│    ├── razorpay_client.py thin lazy wrapper around the razorpay SDK
-│    ├── cases.py           open case · run_recovery_cycle · mark_case_recovered_by_link
-│    └── escalation.py      Slack webhook + log file on escalated cases
-│
-├── routes/
-│    ├── webhooks.py        /webhooks/razorpay (HMAC + idempotency + background queue)
-│    ├── analytics.py       /analytics/summary (KPIs + unit economics)
-│    ├── cases.py           /recovery/cases[/{id}] (with expand=true bulk endpoint)
-│    └── dashboard.py       /dashboard (single-file HTML)
-│
-├── static/
-│    └── dashboard.html     the operations console
+├── app/
+│    ├── main.py              FastAPI entrypoint (+ /health)
+│    ├── config.py            env-driven settings
+│    ├── db.py                SQLAlchemy engine + session
+│    ├── models/entities.py   Customer · Payment · PaymentEvent · RecoveryCase · RecoveryAction · AuditLog
+│    │
+│    ├── agent/
+│    │    ├── schema.py          AgentContext / AgentDecision (pydantic, 5-value action enum)
+│    │    ├── stub_llm.py        deterministic diagnosis + action selection
+│    │    ├── claude_llm.py      Anthropic Claude adapter (forced tool-use)
+│    │    ├── groq_llm.py        Groq adapter (forced tool-use)
+│    │    └── router.py          stub / claude / groq switch + coherence sandbox
+│    │
+│    ├── services/
+│    │    ├── policy.py          attempts · amount · cooldown · allowlist · stopped-guard
+│    │    ├── executor.py        real Razorpay Payment Link creation + simulated retry/notify
+│    │    ├── razorpay_client.py thin lazy wrapper around the razorpay SDK
+│    │    ├── cases.py           open case · run cycle · mark-recovered · mark-stopped
+│    │    └── escalation.py      Slack webhook + log file on escalated cases
+│    │
+│    ├── routes/
+│    │    ├── webhooks.py        /webhooks/razorpay (HMAC + idempotency + background queue)
+│    │    ├── analytics.py       /analytics/summary (KPIs + unit economics)
+│    │    ├── cases.py           /recovery/cases[/{id}] (with expand=true bulk endpoint)
+│    │    └── dashboard.py       /dashboard (single-file HTML)
+│    │
+│    └── static/dashboard.html   the operations console
 │
 ├── scripts/
-│    ├── simulator.py                     10k-case benchmark, baseline vs RecoverAI
-│    ├── seed_demo.py                     3 pre-canned failed payments for a smooth demo
-│    └── simulate_failed_webhook.py       smoke test
+│    ├── simulator.py                 10k-case benchmark, baseline vs RecoverAI
+│    ├── seed_demo.py                 3 pre-canned failed payments for a smooth demo
+│    └── simulate_failed_webhook.py   smoke test
 │
-├── tests/
-│    └── test_smoke.py · test_policy.py · test_agent.py
-│
-├── docs/
-│    └── ARCHITECTURE.md · BENCHMARK.md · VIDEO_SCRIPT.md
-│
-└── assets/
-     └── screenshots + Razorpay logo
+├── tests/                       test_smoke.py · test_policy.py · test_agent.py
+├── docs/                        ARCHITECTURE.md · BENCHMARK.md · VIDEO_SCRIPT.md
+├── assets/                      screenshots + Razorpay logo
+├── requirements.txt · .env.example · LICENSE
 ```
 
 ## Roadmap (deliberately not built)
@@ -301,4 +300,4 @@ app/
 
 ## License
 
-MIT.
+[MIT](LICENSE).
