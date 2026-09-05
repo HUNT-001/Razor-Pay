@@ -1,3 +1,4 @@
+import time
 from functools import lru_cache
 
 import razorpay
@@ -22,6 +23,7 @@ def create_payment_link(amount_inr: float, description: str,
         "currency": "INR",
         "accept_partial": False,
         "description": description[:2048],
+        "expire_by": int(time.time()) + 24 * 60 * 60,   # 24h expiry
         "reminder_enable": True,
         "notify": {"sms": bool(customer_contact), "email": bool(customer_email)},
     }
