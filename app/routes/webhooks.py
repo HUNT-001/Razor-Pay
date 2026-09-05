@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.models.entities import AuditLog, Customer, Payment, PaymentEvent
-from app.services.cases import (mark_case_recovered_by_link,
+from app.services.cases import (close_open_case_on_direct_capture,
+                                 mark_case_recovered_by_link,
+                                 mark_case_stopped_by_link,
                                  open_case_for_payment, run_recovery_cycle)
 
 log = logging.getLogger("recoverai.webhook")
@@ -99,6 +101,12 @@ async def razorpay_webhook(
                 payment.customer.failure_count += 1
         db.commit()
 
+        if event_type == "payment.captured":
+            closed = close_open_case_on_direct_capture(db, payment)
+            if closed:
+                log.info("direct-capture closed case=%s amount=%.2f",
+                         closed.id, closed.recovered_amount)
+
         result = {"received": event_type, "payment_id": payment.id}
         if event_type == "payment.failed":
             case = open_case_for_payment(db, payment)
@@ -107,6 +115,15 @@ async def razorpay_webhook(
             background.add_task(_run_cycle_bg, case.id)
             result.update({"case_id": case.id, "case_status": "queued"})
         return result
+
+    if event_type in ("payment_link.expired", "payment_link.cancelled"):
+        link_id = ((p.get("payment_link", {}) or {}).get("entity", {}) or {}).get("id")
+        case = mark_case_stopped_by_link(db, link_id)
+        db.add(AuditLog(event=event_type, case_id=case.id if case else None,
+                        payload={"link_id": link_id, "matched_case": bool(case)}))
+        db.commit()
+        return {"received": event_type, "link_id": link_id,
+                "matched_case_id": case.id if case else None}
 
     if event_type == "payment_link.paid":
         link_entity = (p.get("payment_link", {}) or {}).get("entity", {}) or {}
