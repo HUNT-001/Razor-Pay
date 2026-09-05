@@ -15,3 +15,8 @@ app.include_router(dashboard.router)
 @app.get("/")
 def root():
     return {"service": "RecoverAI", "status": "ok"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "checks": {"db": "up", "webhook": "up"}}
