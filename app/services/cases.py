@@ -120,3 +120,37 @@ def mark_case_recovered_by_link(db: Session, payment_link_id: str,
                     payload={"payment_link_id": payment_link_id, "amount": paid_amount_inr}))
     db.commit(); db.refresh(case)
     return case
+
+
+def mark_case_stopped_by_link(db: Session, payment_link_id: str) -> RecoveryCase | None:
+    """Called when Razorpay reports payment_link.expired / .cancelled."""
+    action = (db.query(RecoveryAction)
+              .filter_by(external_ref=payment_link_id, action_type="payment_link")
+              .order_by(RecoveryAction.id.desc()).first())
+    if not action:
+        return None
+    case = db.query(RecoveryCase).get(action.case_id)
+    if not case or case.status == "recovered":
+        return case
+    action.result = "expired"
+    case.status = "stopped"
+    case.updated_at = datetime.utcnow()
+    db.add(AuditLog(event="payment_link.expired", case_id=case.id,
+                    payload={"payment_link_id": payment_link_id}))
+    db.commit(); db.refresh(case)
+    return case
+
+
+def close_open_case_on_direct_capture(db: Session, payment: Payment) -> RecoveryCase | None:
+    """Customer paid the ORIGINAL payment directly (e.g. via a manual retry)
+    without using our recovery link. Any open case for that payment closes."""
+    case = db.query(RecoveryCase).filter_by(payment_id=payment.id).first()
+    if not case or case.status == "recovered":
+        return case
+    case.status = "recovered"
+    case.recovered_amount = payment.amount
+    case.updated_at = datetime.utcnow()
+    db.add(AuditLog(event="payment.captured_direct", case_id=case.id,
+                    payload={"payment_id": payment.id, "amount": payment.amount}))
+    db.commit(); db.refresh(case)
+    return case
